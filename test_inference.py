@@ -46,8 +46,8 @@ def load_model_and_generate(checkpoint_path=f'checkpoints/{SAVE_MODEL_NAME}/{SAV
             generated_ids = model.generate(
                 input_ids,
                 max_tokens=50,         # Generate 50 tokens
-                temperature=0.7,       # Control randomness
-                min_p=0.1,            # Minimum probability filter
+                temperature=1,       # Control randomness
+                min_p=0.04,            # Minimum probability filter
                 echo_back=True         # Include input in output
             )
         
@@ -66,4 +66,4 @@ if __name__ == "__main__":
         torch.cuda.empty_cache()
     
     # Run inference
-    load_model_and_generate()
+    load_model_and_generate("checkpoints/Acheckpoint_999555072/checkpoint_999555072.pt")

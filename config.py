@@ -5,9 +5,9 @@ N_LAYERS=12
 
 total_tokens = 1e7 # 1e8
 
-BLOCK_SIZE = 1024
-BATCH_SIZE = 26
-GRAD_ACCUM_STEPS = 5 #20 # higher = higher loss should i make it go up after some time or just leave it be?
+BLOCK_SIZE =    1024
+BATCH_SIZE =      24   # 16
+GRAD_ACCUM_STEPS = 4   # 8
 
 USE_BIAS = False
 DEVICE = "cuda"

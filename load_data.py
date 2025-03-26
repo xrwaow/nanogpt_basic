@@ -3,9 +3,9 @@ import torch
 import os
 from tqdm import tqdm
 from config import *
-from model import llm
 import json
 import matplotlib.pyplot as plt
+import glob
 
 def save_checkpoint(model, metrics, filename):
     base_dir = f"checkpoints/{filename}"
@@ -14,7 +14,6 @@ def save_checkpoint(model, metrics, filename):
     checkpoint = {
         'model_state_dict': model.state_dict(),
         'model_params': model.model_params,
-        #'metrics': metrics
     }
     with open(f'{base_dir}/{filename}.json', 'w') as f:
         json.dump({k: [float(v) for v in vals] for k, vals in metrics.items()}, f)
@@ -49,29 +48,67 @@ def load_checkpoint(filename):
         new_state_dict[name] = v
     
     model.load_state_dict(new_state_dict)
-    return model#, checkpoint.get('metrics', None)
+    return model
 
 def get_batch(data, device):
-    ix = torch.randint(0, len(data) - BLOCK_SIZE + 1, (BATCH_SIZE,), device=device) # would device=device help
+    ix = torch.randint(0, len(data) - BLOCK_SIZE + 1, (BATCH_SIZE,), device=device)
     x = torch.stack([data[i:i+BLOCK_SIZE] for i in ix])
     y = torch.stack([data[i+1:i+1+BLOCK_SIZE] for i in ix])
     return x.to(device), y.to(device)
 
 def prepare_data(dataset_name, max_tokens, tokenizer):
-    data_path = f"data/{max_tokens}.pt"
+    # Create data directory if it doesn't exist
+    os.makedirs("data", exist_ok=True)
     
-    if os.path.exists(data_path):
-        if int(data_path.split("/")[1][:-3]) == max_tokens:
-            print(f"{data_path} already exists")
-            return data_path
+    # Find all existing data files
+    existing_files = glob.glob("data/*.pt")
+    existing_files.sort(key=lambda x: int(os.path.basename(x).split('.')[0]))
     
-    data = load_dataset(dataset_name, split='train')
-    ret = []
-    for example in tqdm(data):
-        ret += tokenizer.encode(example["text"]) + [tokenizer.eos_token_id]
-        if len(ret) >= max_tokens: break
+    # Check if we have a suitable existing file
+    for file in existing_files:
+        file_tokens = int(os.path.basename(file).split('.')[0])
+        if file_tokens >= max_tokens:
+            print(f"Using existing data file {file} with {file_tokens} tokens")
+            return file
     
-    tensor_data = torch.tensor(ret)
-    torch.save(tensor_data, data_path)
-    print("data saved")
-    return data_path
+    # If we get here, we need to create/append to a file
+    if existing_files:
+        # Use the largest existing file as starting point
+        largest_file = existing_files[-1]
+        current_tokens = int(os.path.basename(largest_file).split('.')[0])
+        data = torch.load(largest_file).tolist()
+        print(f"Found existing data with {current_tokens} tokens, appending...")
+    else:
+        current_tokens = 0
+        data = []
+        print("No existing data found, starting from scratch")
+    
+    # Load dataset
+    dataset = load_dataset(dataset_name, split='train')
+    
+    # Calculate how many more tokens we need
+    remaining_tokens = max_tokens - current_tokens
+    if remaining_tokens <= 0:
+        return largest_file
+    
+    # Process dataset to get more tokens
+    for example in tqdm(dataset, desc="Processing data"):
+        new_tokens = tokenizer.encode(example["text"]) + [tokenizer.eos_token_id]
+        data.extend(new_tokens)
+        current_tokens += len(new_tokens)
+        
+        if current_tokens >= max_tokens:
+            data = data[:max_tokens]
+            current_tokens = max_tokens
+            break
+    
+    # Save the new data file
+    new_filename = f"data/{current_tokens}.pt"
+    torch.save(torch.tensor(data), new_filename)
+    
+    # Remove old file if we appended to it (keep only the largest file)
+    if existing_files and largest_file != new_filename:
+        os.remove(largest_file)
+    
+    print(f"Data saved to {new_filename} with {current_tokens} tokens")
+    return new_filename
