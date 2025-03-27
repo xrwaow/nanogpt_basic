@@ -1,21 +1,41 @@
-D_MODEL=768
-N_HEADS=12
-N_EMBD=3072
-N_LAYERS=12
+#D_MODEL =  768
+N_LAYERS=   12
+N_HEADS =   12
+N_EMBD  = 768#4 * D_MODEL
 
-total_tokens = 1e7 # 1e8
+total_tokens = 1e6 # 1e8
 
 BLOCK_SIZE =    1024
-BATCH_SIZE =      24   # 16
+BATCH_SIZE =      26   # 16
 GRAD_ACCUM_STEPS = 4   # 8
-
-USE_BIAS = False
-DEVICE = "cuda"
 
 TOKENS_PER_BATCH = BLOCK_SIZE * BATCH_SIZE * GRAD_ACCUM_STEPS
 MAX_TOKENS = int((total_tokens // (TOKENS_PER_BATCH)) * (TOKENS_PER_BATCH))
 
-SAVE_MODEL_NAME = f"checkpoint_{MAX_TOKENS}"
+# adamw optimizer
+learning_rate = 6e-4 # max learning rate
+#max_iters = 600000 # total number of training iterations
+weight_decay = 1e-1
+beta1 = 0.9
+beta2 = 0.95
+grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
+# learning rate decay settings
+decay_lr = True # whether to decay the learning rate
+warmup_iters = 10#2000 # how many steps to warm up for
+lr_decay_iters = MAX_TOKENS // TOKENS_PER_BATCH#600000 # should be ~= max_iters per Chinchilla
+min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
+
+# dropout = 0
+
+USE_BIAS = False
+DEVICE = "cuda"
+
+SAVE_MODEL_NAME = f"checkpoint_fineweb_1m_{MAX_TOKENS}"
+
+tokenizer_name = 'unsloth/mistral-7b-v0.3'
+dataset_name = 'tensorlabco/fineweb-edu-sample-10BT'
+
+#'/home/xr/.cache/huggingface/datasets/haritzpuerto___the_pile_00_open_web_text2/' # 'haritzpuerto/the_pile_00_openwebtext2'
 
 """
 # https://github.com/karpathy/nanoGPT/blob/master/model.py#L207
