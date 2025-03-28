@@ -60,21 +60,6 @@ class MultiheadGQA(nn.Module):
         v = self.v_proj(x).view(B, T, self.kv_heads, self.head_dim).transpose(1, 2)
         # Result shape: (B, kv_heads, T, head_dim)
 
-        # Option B: Original combined projection
-        # kv = self.kv_proj(x).view(B, T, 2, self.kv_heads, self.head_dim)
-        # k, v = kv.unbind(dim=2) # (B, T, kv_heads, head_dim)
-        # k = k.transpose(1, 2) # (B, kv_heads, T, head_dim)
-        # v = v.transpose(1, 2) # (B, kv_heads, T, head_dim)
-
-        # --- GQA-specific repetition ---
-        # Instead of repeating in memory, SDPA might handle this more efficiently
-        # under the hood, especially with torch.compile using Triton kernels.
-        # However, the *interface* still requires compatible shapes.
-        # Repeat K and V heads without creating large intermediate tensors if possible.
-        # This is often handled internally by optimized kernels (like FlashAttention or Triton via compile)
-        # but for the standard SDPA, we still need shapes that broadcast correctly or match.
-        # Let's explicitly repeat for clarity with standard SDPA, but be aware compile might optimize this away.
-
         # Efficient repetition for standard SDPA if needed:
         if self.repeats > 1:
              # (B, kv_heads, T, head_dim) -> (B, kv_heads, 1, T, head_dim)
@@ -86,11 +71,16 @@ class MultiheadGQA(nn.Module):
              # -> (B, query_heads, T, head_dim)
              k = k.reshape(B, self.query_heads, T, self.head_dim)
              v = v.reshape(B, self.query_heads, T, self.head_dim)
+        
+        # att_scores = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(self.head_size))
+        # mask = self.tril[:, :, :T, :T] == 0
+        # att_scores = att_scores.masked_fill(mask, float('-inf'))
+        # att_weights = F.softmax(att_scores, dim=-1)
+        # y = att_weights @ v
 
         # --- Perform scaled dot-product attention ---
         # Input shapes: q(B, Hq, T, D), k(B, Hkv*r, T, D), v(B, Hkv*r, T, D) where Hkv*r = Hq
         # Needs (B, Heads, SeqLen, HeadDim)
-        # dropout_p should ideally be self.dropout_p if you add dropout
         y = F.scaled_dot_product_attention(
             q, k, v, attn_mask=None, dropout_p=0.0, is_causal=True
         )

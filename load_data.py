@@ -365,6 +365,7 @@ def load_checkpoint(filename):
     return model
 
 def generate_examples(model, checkpoint_path, idx, loss, total_tokens, tokenizer):
+    # TODO add top_k = 200 
     examples = [
         "The capital city of Japan is",
         "The quick brown fox jumps over",

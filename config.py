@@ -14,6 +14,8 @@ MAX_TOKENS = int((total_tokens // (TOKENS_PER_BATCH)) * (TOKENS_PER_BATCH))
 GET_SAMPLE_EVERY = 50
 SAVE_EVERY = GET_SAMPLE_EVERY * 4
 
+# torch.manual_seed(1337)
+
 # adamw optimizer
 learning_rate = 6e-4 # max learning rate
 weight_decay = 1e-1
@@ -23,11 +25,10 @@ grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
 # learning rate decay settings
 decay_lr = True # whether to decay the learning rate
 warmup_iters = 10#2000 # how many steps to warm up for
-lr_decay_iters = MAX_TOKENS // TOKENS_PER_BATCH#600000 # should be ~= max_iters per Chinchilla
+lr_decay_iters = MAX_TOKENS // TOKENS_PER_BATCH # 600000 # should be ~= max_iters per Chinchilla
 min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
 
 # dropout = 0
-
 USE_BIAS = False
 DEVICE = "cuda"
 
