@@ -40,7 +40,7 @@ def get_lr(it):
 
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
-data_path = prepare_data(dataset_name, MAX_TOKENS, tokenizer)
+data_path = prepare_data_optimized(dataset_name, MAX_TOKENS, tokenizer)#prepare_data(dataset_name, MAX_TOKENS, tokenizer)
 data = torch.load(data_path, weights_only=True)
 
 # create model
@@ -68,7 +68,8 @@ scaler = GradScaler(enabled=True)
 
 # initialize tracking
 total_tokens = 0
-all_metrics = {'loss': [], 'entropy': [], 'perplexity': [], 'grad_norm': [], 'lr': []}
+#all_metrics = {'loss': [], 'entropy': [], 'perplexity': [], 'grad_norm': [], 'lr': []}
+all_metrics = {'loss': [], 'entropy': [], 'grad_norm': [], 'lr': []}
 progress_bar = tqdm(total=MAX_TOKENS, desc='training progress')
 iter_num = 0
 
@@ -105,30 +106,34 @@ while total_tokens < MAX_TOKENS:
     # calculate metrics
     c_loss = loss.item() * GRAD_ACCUM_STEPS
     entropy = calculate_entropy(logits.detach())
-    perplexity = torch.exp(torch.tensor(c_loss)).item()
+    #perplexity = torch.exp(torch.tensor(c_loss)).item()
     grad_norm = compute_grad_norm(llm_model)
     
     # store metrics
     # add Throughput (Samples/sec or Tokens/sec)
     all_metrics['loss'].append(c_loss)
     all_metrics['entropy'].append(entropy)
-    all_metrics['perplexity'].append(perplexity)
+    #all_metrics['perplexity'].append(perplexity)
     all_metrics['grad_norm'].append(grad_norm)
     all_metrics['lr'].append(lr)
     
     total_tokens += TOKENS_PER_BATCH
     iter_num += 1
 
-    if iter_num % 4 == 0 or total_tokens >= MAX_TOKENS: generate_examples(llm_model, SAVE_MODEL_NAME, iter_num, c_loss, total_tokens, tokenizer)
+    if iter_num % GET_SAMPLE_EVERY == 0 or total_tokens >= MAX_TOKENS:
+        generate_examples(llm_model, SAVE_MODEL_NAME, iter_num, c_loss, total_tokens, tokenizer)
+        save_fig(all_metrics, SAVE_MODEL_NAME, iter_num)
+    
+    if iter_num % SAVE_EVERY == 0 or total_tokens >= MAX_TOKENS:
+        save_checkpoint(llm_model, all_metrics, SAVE_MODEL_NAME)
     
     progress_bar.update(TOKENS_PER_BATCH)
     progress_bar.set_postfix({
         'loss': c_loss, 
         'entropy': entropy, 
-        'perplexity': perplexity,
+        #'perplexity': perplexity,
         'lr': lr,
         'iter': iter_num
     })
 
-#generate_examples(llm_model, SAVE_MODEL_NAME, iter_num, c_loss, total_tokens, tokenizer)
 save_checkpoint(llm_model, all_metrics, SAVE_MODEL_NAME)

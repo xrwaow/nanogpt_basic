@@ -152,22 +152,46 @@ class llm(nn.Module):
         self.head = nn.Linear(n_embd, vocab_size, bias=use_bias)
         
         if yap:
-            # parameter calculation
-            embed_params = vocab_size * n_embd
-            attn_params = 4 * n_embd * n_embd
-            mlp_params = n_embd * 4 + n_embd * 4
-            ln_params = 2 * n_embd
-            one_layer = attn_params + mlp_params + 2 * ln_params
-            total_params = embed_params + n_layers * one_layer + n_embd * vocab_size + ln_params
-            print("----- params -----")
-            print(f"embedding params: {embed_params:,}")
-            print(f"attention params per layer: {attn_params:,}")
-            print(f"mlp params per layer: {mlp_params:,}")
-            print(f"one transformer layer: {one_layer:,}")
-            print(f"total params: {total_params:,}")
-            print("----- ------ -----")
+            # Use PyTorch's parameter counting for accuracy
+            print("----- Parameter Calculation -----")
 
-    def forward(self, x, padding_mask=None):
+            def count_params(module):
+                # Count only trainable parameters
+                return sum(p.numel() for p in module.parameters() if p.requires_grad)
+
+            embed_params = count_params(self.embed)
+            pos_embed_params = count_params(self.pos_embed)
+
+            # Parameters for one block (assuming all blocks are identical)
+            # Need to access the first block AFTER it's created
+            first_block = self.blocks[0]
+            attn_params_per_layer = count_params(first_block.attn)
+            mlp_params_per_layer = count_params(first_block.mlp)
+            ln_params_per_layer = count_params(first_block.ln1) + count_params(first_block.ln2)
+            one_layer_params = count_params(first_block)
+
+            # Parameters for final layers
+            ln_f_params = count_params(self.ln_f)
+            head_params = count_params(self.head)
+
+            # Calculate total directly from the model (most reliable)
+            total_params_actual = count_params(self)
+
+            print(f"Token Embedding: {embed_params:,}")
+            print(f"Positional Embedding: {pos_embed_params:,}")
+            print("--- Per Layer ---")
+            print(f"  Attention (GQA): {attn_params_per_layer:,}")
+            print(f"  MLP: {mlp_params_per_layer:,}")
+            print(f"  LayerNorms (x2): {ln_params_per_layer:,}")
+            print(f"  Total per Transformer Layer: {one_layer_params:,}")
+            print("--- Final Layers ---")
+            print(f"Final LayerNorm: {ln_f_params:,}")
+            print(f"Output Head: {head_params:,}")
+            print("--- Grand Total ---")
+            print(f"Total Trainable Parameters: {total_params_actual:,}")
+            print("----- ----------------------- -----")
+
+    def forward(self, x):
         # Get the actual sequence length from the input
         batch_size, seq_length = x.size()
         
