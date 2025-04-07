@@ -2,10 +2,10 @@ N_LAYERS=   12
 N_HEADS =   12
 N_EMBD  = 768
 
-total_tokens =   1e9
+total_tokens =   1e7#1e9
 
 BLOCK_SIZE =    1024
-BATCH_SIZE =     128
+BATCH_SIZE =      24
 GRAD_ACCUM_STEPS = 4
 
 TOKENS_PER_BATCH = BLOCK_SIZE * BATCH_SIZE * GRAD_ACCUM_STEPS
@@ -14,25 +14,26 @@ MAX_TOKENS = int((total_tokens // (TOKENS_PER_BATCH)) * (TOKENS_PER_BATCH))
 GET_SAMPLE_EVERY = 50
 SAVE_EVERY = GET_SAMPLE_EVERY * 4
 
-# torch.manual_seed(1337)
+SEED = 42
 
 # adamw optimizer
-learning_rate = 6e-4 # max learning rate
+learning_rate = 0.001#6e-4 # max learning rate
+min_lr = 0.0005#6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
 weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95
 grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
+
 # learning rate decay settings
 decay_lr = True # whether to decay the learning rate
 warmup_iters = 10#2000 # how many steps to warm up for
 lr_decay_iters = MAX_TOKENS // TOKENS_PER_BATCH # 600000 # should be ~= max_iters per Chinchilla
-min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
 
 # dropout = 0
 USE_BIAS = False
 DEVICE = "cuda"
 
-SAVE_MODEL_NAME = f"checkpoint_fineweb_1B_{MAX_TOKENS}"
+SAVE_MODEL_NAME = f"checkpoint_fineweb_1B_rope_{MAX_TOKENS}"
 
 tokenizer_name = 'unsloth/mistral-7b-v0.3'
 dataset_name = 'tensorlabco/fineweb-edu-sample-10BT'
