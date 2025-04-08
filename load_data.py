@@ -226,9 +226,6 @@ def prepare_data_optimized(dataset_name, max_tokens, tokenizer, batch_size=1000,
 
     return new_filename
 
-# Original prepare_data retained below for reference if needed
-# ... (Original prepare_data code omitted for brevity, it's unused by train.py now) ...
-
 # --- Batch Loading ---
 def get_batch(data, device):
     """Generates a random batch of data (x, y) pairs."""

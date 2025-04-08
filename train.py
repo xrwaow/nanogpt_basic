@@ -9,7 +9,11 @@ import functools # Added for hook factory
 torch.set_float32_matmul_precision("high")
 torch.backends.cudnn.benchmark = True
 
-from config import *
+import sys
+if sys.argv[1] == "a100":
+    from config_a100 import *
+else:
+    from config import *
 from load_data import * # Imports save_fig, save_checkpoint, and the new save_layer_sparsity_plot
 from model import llm
 
@@ -72,7 +76,8 @@ llm_model = llm(
     n_embd=N_EMBD,
     n_layers=N_LAYERS,
     seq_len=BLOCK_SIZE,
-    use_bias=USE_BIAS
+    use_bias=USE_BIAS,
+    kv_heads=6,
 )
 
 # --- Register Per-Layer Sparsity Hooks BEFORE moving to device and compiling ---

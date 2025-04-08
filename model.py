@@ -258,7 +258,11 @@ class llm(nn.Module):
         self.ln_f = nn.LayerNorm(n_embd) # Final LayerNorm
         self.head = nn.Linear(n_embd, vocab_size, bias=use_bias) # Output head
 
-        # self.head.weight = self.embed.weight - shit loss with this
+        self.head.weight = self.embed.weight# - shit loss with this
+
+        init_std = (n_embd) ** -0.5
+        print(f"Re-initializing tied weights with std={init_std:.4f} (1/sqrt(n_embd))")
+        torch.nn.init.normal_(self.embed.weight, mean=0.0, std=init_std)
 
         if yap:
             self._print_params() # Call helper for parameter printing

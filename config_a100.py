@@ -2,10 +2,10 @@ N_LAYERS=   12
 N_HEADS =   12
 N_EMBD  =  768
 
-total_tokens =   1e7#1e9
+total_tokens =   1e9
 
 BLOCK_SIZE =    1024
-BATCH_SIZE =      24
+BATCH_SIZE =      92
 GRAD_ACCUM_STEPS = 4
 
 TOKENS_PER_BATCH = BLOCK_SIZE * BATCH_SIZE * GRAD_ACCUM_STEPS
@@ -17,8 +17,8 @@ SAVE_EVERY = GET_SAMPLE_EVERY * 4
 SEED = 42
 
 # adamw optimizer
-learning_rate = 0.001#6e-4 # max learning rate
-min_lr = 0.0005#6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
+learning_rate = 6e-4 # max learning rate
+min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
 weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95
@@ -33,7 +33,7 @@ lr_decay_iters = MAX_TOKENS // TOKENS_PER_BATCH # 600000 # should be ~= max_iter
 USE_BIAS = False
 DEVICE = "cuda"
 
-SAVE_MODEL_NAME = f"checkpoint_fineweb_tied_{MAX_TOKENS}"
+SAVE_MODEL_NAME = f"checkpoint_fineweb_1B_tied_{MAX_TOKENS}"
 
 tokenizer_name = 'unsloth/mistral-7b-v0.3'
 dataset_name = 'tensorlabco/fineweb-edu-sample-10BT'
