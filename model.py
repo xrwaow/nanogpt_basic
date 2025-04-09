@@ -5,17 +5,6 @@ import math
 
 # Helper function for Rotary Positional Embeddings (RoPE)
 def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
-    """
-    Precomputes the frequency and complex number representations for RoPE.
-
-    Args:
-        dim (int): The dimension of the embeddings (specifically, head dimension).
-        end (int): The maximum sequence length.
-        theta (float): The base frequency for RoPE.
-
-    Returns:
-        torch.Tensor: A tensor of complex numbers shape (end, dim // 2).
-    """
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim)) # Shape: (dim / 2)
     t = torch.arange(end, device=freqs.device) # Shape: (end)
     freqs = torch.outer(t, freqs) # Shape: (end, dim / 2)
@@ -28,19 +17,6 @@ def apply_rotary_emb(
     xk: torch.Tensor,
     freqs_cis: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Applies Rotary Positional Embeddings to query (xq) and key (xk) tensors.
-
-    Args:
-        xq (torch.Tensor): Query tensor with shape (B, H, T, D_head).
-        xk (torch.Tensor): Key tensor with shape (B, H, T, D_head).
-        freqs_cis (torch.Tensor): Precomputed complex numbers for RoPE
-                                  shape (T, D_head // 2) or broadcastable.
-
-    Returns:
-        tuple[torch.Tensor, torch.Tensor]: Query and Key tensors with RoPE applied.
-                                           Returned tensors will have the same dtype as inputs xq, xk.
-    """
     # Store original dtype
     input_dtype = xq.dtype
 
@@ -71,6 +47,8 @@ def apply_rotary_emb(
 
 # Keep mha class definition if you might want to switch back, but it's unused with GQA+RoPE
 class mha(nn.Module):
+    # Note: This class still reads from config if used.
+    # Needs modification to accept params if intended for use.
     def __init__(self, n_embd, n_heads, use_bias):
         super().__init__()
         assert n_embd % n_heads == 0, "n_embd must be divisible by n_heads"
@@ -108,29 +86,28 @@ class mha(nn.Module):
         return y
 
 class MultiheadGQA(nn.Module):
-    def __init__(self, embed_dim, query_heads, kv_heads, max_seq_len, use_bias=False, rope_theta=10000.0):
+    def __init__(self, n_embd, n_heads, kv_heads, use_bias, rope_theta, block_size):
         super().__init__()
-        assert embed_dim % query_heads == 0, "embed_dim must be divisible by query_heads"
-        assert query_heads % kv_heads == 0, "query_heads must be divisible by kv_heads"
+        assert n_embd % n_heads == 0, "N_EMBD must be divisible by N_HEADS"
+        assert n_heads % kv_heads == 0, "N_HEADS must be divisible by KV_HEADS"
 
-        self.query_heads = query_heads
+        self.query_heads = n_heads
         self.kv_heads    = kv_heads
-        self.head_dim    = embed_dim // query_heads
+        self.head_dim    = n_embd // n_heads
         self.repeats     = self.query_heads // self.kv_heads
-        self.embed_dim   = embed_dim
+        self.embed_dim   = n_embd
+        self.max_seq_len = block_size
+        self.rope_theta  = rope_theta
 
         # Projections for Q, K, V
-        self.q_proj   = nn.Linear(embed_dim, query_heads * self.head_dim, bias=use_bias)
-        self.k_proj   = nn.Linear(embed_dim, kv_heads    * self.head_dim, bias=use_bias)
-        self.v_proj   = nn.Linear(embed_dim, kv_heads    * self.head_dim, bias=use_bias)
+        self.q_proj   = nn.Linear(self.embed_dim, self.query_heads * self.head_dim, bias=use_bias)
+        self.k_proj   = nn.Linear(self.embed_dim, self.kv_heads    * self.head_dim, bias=use_bias)
+        self.v_proj   = nn.Linear(self.embed_dim, self.kv_heads    * self.head_dim, bias=use_bias)
 
         # Output projection
-        self.out_proj = nn.Linear(query_heads * self.head_dim, embed_dim, bias=use_bias)
+        self.out_proj = nn.Linear(self.query_heads * self.head_dim, self.embed_dim, bias=use_bias)
 
         # Precompute RoPE frequencies
-        # Needs head_dim and max_seq_len
-        self.max_seq_len = max_seq_len
-        self.rope_theta = rope_theta
         # Compute frequencies on CPU initially, will be moved to device in forward
         freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2, self.rope_theta)
         self.register_buffer("freqs_cis", freqs_cis, persistent=False) # Register as buffer, not parameter
@@ -153,7 +130,6 @@ class MultiheadGQA(nn.Module):
         assert C == self.embed_dim, f"Input embed_dim ({C}) doesn't match model embed_dim ({self.embed_dim})"
         assert T <= self.max_seq_len, f"Sequence length {T} exceeds model maximum {self.max_seq_len}"
 
-
         # Project Q, K, V
         q = self.q_proj(x) # (B, T, Hq * D)
         k = self.k_proj(x) # (B, T, Hkv * D)
@@ -172,32 +148,17 @@ class MultiheadGQA(nn.Module):
 
         # Apply rotary embeddings. Function ensures output dtype matches input dtype.
         q, k = apply_rotary_emb(q, k, freqs_cis=current_freqs_cis)
-        # q shape: (B, Hq, T, D), dtype should match original q (e.g., bfloat16)
-        # k shape: (B, Hkv, T, D), dtype should match original k (e.g., bfloat16)
-
-        # *** Check dtypes before SDPA ***
-        # This check is crucial because SDPA requires Q, K, V to have the same dtype.
-        # Although apply_rotary_emb *should* return the correct dtype, this makes it explicit.
-        target_dtype = v.dtype # Usually bfloat16 or float16
-        if q.dtype != target_dtype:
-            q = q.to(target_dtype)
-        if k.dtype != target_dtype:
-            k = k.to(target_dtype)
-        # Now q, k, v all have dtype `target_dtype`
 
         # Repeat K and V heads if necessary (if repeats > 1)
         k = self.repeat_kv(k, self.repeats) # (B, Hkv, T, D) -> (B, Hq, T, D)
         v = self.repeat_kv(v, self.repeats) # (B, Hkv, T, D) -> (B, Hq, T, D)
 
         # Perform scaled dot-product attention
-        # Inputs q, k, v should now all have the same dtype (target_dtype)
-        # and shape (B, Hq, T, D) after repeat_kv
         y = F.scaled_dot_product_attention(
             q, k, v, attn_mask=None, dropout_p=0.0, is_causal=True # is_causal=True enables causal mask
         )
         # Output shape: (B, query_heads, T, head_dim)
 
-        # Reshape output and project
         # (B, Hq, T, D) -> (B, T, Hq, D) -> (B, T, Hq*D = C)
         y = y.transpose(1, 2).contiguous().view(B, T, self.query_heads * self.head_dim)
         return self.out_proj(y) # (B, T, C)
@@ -206,65 +167,62 @@ class MultiheadGQA(nn.Module):
 class mlp(nn.Module):
     def __init__(self, n_embd, use_bias):
         super().__init__()
-        # Standard MLP structure: Linear -> Activation -> Linear
         self.fc1 = nn.Linear(n_embd, n_embd*4, bias=use_bias)
         self.act = nn.GELU() # Consider SiLU/SwiGLU for modern LLMs if desired
         self.fc2 = nn.Linear(n_embd*4, n_embd, bias=use_bias)
-        # Combine into sequential for forward pass simplicity
+
         self.net = nn.Sequential(self.fc1, self.act, self.fc2)
 
     def forward(self, x):
         return self.net(x)
 
 class transformer_block(nn.Module):
-    def __init__(self, n_heads, n_embd, use_bias, kv_heads, max_seq_len, rope_theta=10000.0): # Pass max_seq_len and theta
+    def __init__(self, n_embd, n_heads, kv_heads, use_bias, rope_theta, block_size):
         super().__init__()
-        # Use Grouped Query Attention with RoPE
-        self.attn = MultiheadGQA(n_embd, n_heads, kv_heads, max_seq_len, use_bias, rope_theta)
+        self.attn = MultiheadGQA(n_embd, n_heads, kv_heads, use_bias, rope_theta, block_size)
         self.mlp = mlp(n_embd, use_bias)
         self.ln1 = nn.LayerNorm(n_embd)
         self.ln2 = nn.LayerNorm(n_embd)
 
     def forward(self, x):
-        # Pre-LayerNorm structure
-        x = x + self.attn(self.ln1(x)) # Add residual connection after attention
-        x = x + self.mlp(self.ln2(x))  # Add residual connection after MLP
+        x = x + self.attn(self.ln1(x))
+        x = x + self.mlp(self.ln2(x))
         return x
 
 class llm(nn.Module):
-    def __init__(self, vocab_size, n_heads, n_embd, n_layers, seq_len, use_bias=False, kv_heads=2, rope_theta=10000.0, yap=True): # Added rope_theta
+    def __init__(self, vocab_size, n_layers, n_heads, n_embd, kv_heads, use_bias, rope_theta, block_size, print_model_params=False):
         super().__init__()
-        # save init params
+        
         self.model_params = {
             'vocab_size': vocab_size,
+            'n_layers': n_layers,
             'n_heads': n_heads,
             'n_embd': n_embd,
-            'n_layers': n_layers,
-            'seq_len': seq_len, # Maximum sequence length the model was trained with / can handle
-            'use_bias': use_bias,
             'kv_heads': kv_heads,
-            'rope_theta': rope_theta # Store RoPE base frequency
+            'use_bias': use_bias,
+            'rope_theta': rope_theta,
+            'block_size': block_size,
+            'print_model_params': print_model_params
         }
 
-        self.seq_len = seq_len # Store max sequence length
+        self.seq_len = block_size # Use passed block_size
         self.embed = nn.Embedding(vocab_size, n_embd)
-        # Positional embeddings are now handled by RoPE within the attention mechanism
 
-        # Pass kv_heads, max_seq_len, and rope_theta to transformer_block
         self.blocks = nn.ModuleList([
-            transformer_block(n_heads, n_embd, use_bias, kv_heads=kv_heads, max_seq_len=seq_len, rope_theta=rope_theta)
+            transformer_block(n_embd, n_heads, kv_heads, use_bias, rope_theta, block_size)
             for _ in range(n_layers)
         ])
         self.ln_f = nn.LayerNorm(n_embd) # Final LayerNorm
         self.head = nn.Linear(n_embd, vocab_size, bias=use_bias) # Output head
 
-        self.head.weight = self.embed.weight# - shit loss with this
+        self.head.weight = self.embed.weight # Weight tying
 
         init_std = (n_embd) ** -0.5
-        print(f"Re-initializing tied weights with std={init_std:.4f} (1/sqrt(n_embd))")
+        if print_model_params:
+            print(f"Re-initializing tied weights with std={init_std:.4f} (1/sqrt(n_embd))")
         torch.nn.init.normal_(self.embed.weight, mean=0.0, std=init_std)
 
-        if yap:
+        if print_model_params:
             self._print_params() # Call helper for parameter printing
 
     def _print_params(self):
@@ -276,6 +234,7 @@ class llm(nn.Module):
             return sum(p.numel() for p in module.parameters() if p.requires_grad)
 
         embed_params = count_params(self.embed)
+        n_layers_actual = len(self.blocks) # Get actual number of layers
 
         # Parameters for one block (use the first block)
         if self.blocks: # Ensure blocks list is not empty
@@ -299,7 +258,6 @@ class llm(nn.Module):
             head_params_effective = count_params(self.head)
             tying_info = "(Untied)"
 
-
         # Calculate total directly from the model (most reliable)
         total_params_actual = count_params(self)
 
@@ -310,7 +268,7 @@ class llm(nn.Module):
             print(f"  MLP: {mlp_params_per_layer:,}")
             print(f"  LayerNorms (x2): {ln_params_per_layer:,}")
             print(f"  Total per Transformer Layer: {one_layer_params:,}")
-            print(f"Total for {len(self.blocks)} Layers: {one_layer_params * len(self.blocks):,}")
+            print(f"Total for {n_layers_actual} Layers: {one_layer_params * n_layers_actual:,}")
         print("--- Final Layers ---")
         print(f"Final LayerNorm: {ln_f_params:,}")
         print(f"Output Head {tying_info}: {head_params_effective:,}")
@@ -320,41 +278,32 @@ class llm(nn.Module):
 
 
     def forward(self, x):
-        # Get the actual sequence length from the input
         batch_size, seq_length = x.size()
 
-        # Input validation: Check if sequence length exceeds max_seq_len
         if seq_length > self.seq_len:
              raise ValueError(f"Input sequence length ({seq_length}) exceeds model's maximum sequence length ({self.seq_len}) required for RoPE.")
 
-        # Get token embeddings
         x = self.embed(x) # (B, T, C)
 
-        # RoPE is applied *inside* each transformer block's attention layer
-
-        # Apply transformer blocks sequentially
         for block in self.blocks:
             x = block(x)
 
-        # Apply final layer normalization
         x = self.ln_f(x)
-        # Final linear layer (head) to get logits
         return self.head(x)
 
     @torch.no_grad() # Decorator for no_grad context
-    def generate(self, x, max_tokens=10, temperature=1.0, min_p=0.05, top_k=None, echo_back=False):
+    def generate(self, x, max_tokens=10, temperature=1.0, top_k=None, echo_back=False):
         """
         Generates token sequences with optional sampling strategies.
         Uses standard Top-P (nucleus) sampling if min_p is between 0 and 1.
         """
-        self.eval() # Set model to evaluation mode
 
         generated_tokens = [] # Store only newly generated tokens
         current_context = x # Start with the initial context (B, T_prompt)
 
         for _ in range(max_tokens):
             # Ensure context doesn't exceed model's max sequence length for the *next* forward pass
-            current_context_trimmed = current_context[:, -self.seq_len:]
+            current_context_trimmed = current_context[:, -self.seq_len:] # Use self.seq_len set during init
 
             # Get logits for the very last token prediction
             logits = self(current_context_trimmed)[:, -1, :] # (B, VocabSize)
@@ -371,27 +320,12 @@ class llm(nn.Module):
             # Convert logits to probabilities
             probs = F.softmax(logits, dim=-1) # (B, VocabSize)
 
-            # Optional Nucleus (Top-P) sampling
-            if 0 < min_p < 1.0:
-                 probs_sort, probs_idx = torch.sort(probs, dim=-1, descending=True)
-                 probs_sum = torch.cumsum(probs_sort, dim=-1)
-                 # Remove tokens with cumulative probability above the threshold (token *after* the threshold is crossed)
-                 mask = (probs_sum - probs_sort) > min_p
-                 probs_sort[mask] = 0.0 # Zero out probabilities below the threshold
-                 probs_sort.div_(probs_sort.sum(dim=-1, keepdim=True)) # Re-normalize
-                 # Sample from the modified distribution
-                 next_token_idx = torch.multinomial(probs_sort, num_samples=1) # Get index in sorted list
-                 next_token = torch.gather(probs_idx, -1, next_token_idx) # Get original token ID
-            else: # Simple multinomial sampling (works after Top-K modifications too)
-                 next_token = torch.multinomial(probs, num_samples=1) # (B, 1)
+            next_token = torch.multinomial(probs, num_samples=1) # (B, 1)
 
 
             # Append the new token to the context for the next step
             current_context = torch.cat([current_context, next_token], dim=1) # (B, T_prompt + generated_len)
             generated_tokens.append(next_token)
-
-        # Set model back to training mode if needed elsewhere (optional)
-        # self.train()
 
         # Concatenate all generated tokens
         if generated_tokens:

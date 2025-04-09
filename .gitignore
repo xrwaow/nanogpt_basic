@@ -2,3 +2,6 @@ __pycache__/
 1/
 checkpoints/
 data/
+check_stash_size.py
+rope_vs_pe_graph.py
+config_a100.py

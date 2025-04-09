@@ -11,20 +11,12 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 tokenizer_name = 'unsloth/Mistral-7B-v0.3'
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
-# Model configuration (matching training setup)
-VOCAB_SIZE = tokenizer.vocab_size
-D_MODEL = 768
-N_HEADS = 12
-N_EMBD = 3072
-N_LAYERS = 12
-SEQ_LEN = BLOCK_SIZE  # From config: 1024
-USE_BIAS = False
-
 # Example input text
 EXAMPLE_TEXTS = [
     "The quick brown fox jumps over",
     "In a world where technology",
-    "Once upon a time, there was"
+    "Once upon a time, there was",
+    "The capital city of Japan is",
 ]
 
 def load_model_and_generate(checkpoint_path=f'checkpoints/{SAVE_MODEL_NAME}/{SAVE_MODEL_NAME}.pt'):
@@ -45,10 +37,10 @@ def load_model_and_generate(checkpoint_path=f'checkpoints/{SAVE_MODEL_NAME}/{SAV
         with torch.no_grad():
             generated_ids = model.generate(
                 input_ids,
-                max_tokens=50,         # Generate 50 tokens
-                temperature=1,       # Control randomness
-                min_p=0.04,            # Minimum probability filter
-                echo_back=True         # Include input in output
+                max_tokens=50,
+                temperature=1,
+                top_k=64,
+                echo_back=True
             )
         
         # Decode to text
@@ -60,10 +52,4 @@ def load_model_and_generate(checkpoint_path=f'checkpoints/{SAVE_MODEL_NAME}/{SAV
         print(f"Generated: {generated_text}")
         print("-----")
 
-if __name__ == "__main__":
-    # Clear GPU memory if using CUDA
-    if DEVICE == "cuda":
-        torch.cuda.empty_cache()
-    
-    # Run inference
-    load_model_and_generate("checkpoints/Acheckpoint_999555072/checkpoint_999555072.pt")
+load_model_and_generate("/home/xr/code/projects/llm/nanoGPT_tests/checkpoints/checkpoint_fineweb_1B_tied_999735296/checkpoint_fineweb_1B_tied_999735296.pt")
