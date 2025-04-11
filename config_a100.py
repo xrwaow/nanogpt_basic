@@ -1,13 +1,13 @@
 import torch
-import os
 
 # --- Model Architecture ---
 N_LAYERS=   12
-N_HEADS =   12  # Query heads
-KV_HEADS =   2  # Key/Value heads for GQA. N_HEADS must be divisible by KV_HEADS.
+N_HEADS =   12
+KV_HEADS =   2
 N_EMBD  =  768
 USE_BIAS = False
 ROPE_THETA = 10000.0 # RoPE base frequency
+TIE_WEIGHTS = True # Tie embedding and output projection weights
 
 # --- Training Hyperparameters ---
 total_tokens =   1e9
@@ -22,7 +22,7 @@ MAX_TOKENS = int((total_tokens // (TOKENS_PER_BATCH)) * (TOKENS_PER_BATCH))
 # --- Optimizer (AdamW) ---
 learning_rate = 6e-4
 min_lr = 6e-5
-weight_decay = 1e-1
+weight_decay = 1e-2#1e-1
 beta1 = 0.9
 beta2 = 0.95
 grad_clip = 1.0
@@ -37,7 +37,7 @@ GET_SAMPLE_EVERY = 50
 SAVE_EVERY = GET_SAMPLE_EVERY * 4
 CHECKPOINT_DIR = "checkpoints"
 
-SAVE_MODEL_NAME = f"fineweb_{MAX_TOKENS // 1_000_000}M_tied_kvh=2"#f"llm_L{N_LAYERS}_H{N_HEADS}_KV{KV_HEADS}_E{N_EMBD}_T{MAX_TOKENS // 1_000_000}M"
+SAVE_MODEL_NAME = f"testing_fineweb_{MAX_TOKENS // 1_000_000}M"#f"llm_L{N_LAYERS}_H{N_HEADS}_KV{KV_HEADS}_E{N_EMBD}_T{MAX_TOKENS // 1_000_000}M"
 
 # --- Data ---
 DATA_DIR = "data"
@@ -52,7 +52,7 @@ DEVICE = "cuda"
 AMP_DTYPE = torch.bfloat16
 
 # --- Misc ---
-PRINT_MODEL_PARAMS = False
+PRINT_MODEL_PARAMS = True#False
 
 # --- Assertions for Sanity ---
 assert N_HEADS % KV_HEADS == 0, "N_HEADS must be divisible by KV_HEADS"

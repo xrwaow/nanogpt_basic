@@ -2,5 +2,5 @@ __pycache__/
 1/
 checkpoints/
 data/
-check_stash_size.py
-rope_vs_pe_graph.py
+waow.py
+a.ipynb

@@ -19,7 +19,7 @@ EXAMPLE_TEXTS = [
     "The capital city of Japan is",
 ]
 
-def load_model_and_generate(checkpoint_path=f'checkpoints/{SAVE_MODEL_NAME}/{SAVE_MODEL_NAME}.pt'):
+def load_model_and_generate(checkpoint_path=f'checkpoints/{SAVE_DIR_NAME}/checkpoint.pt'):
     # Load checkpoint
     model = load_checkpoint(checkpoint_path)
     print(f"Loaded checkpoint: {total_tokens:,} tokens processed during training")
@@ -52,4 +52,4 @@ def load_model_and_generate(checkpoint_path=f'checkpoints/{SAVE_MODEL_NAME}/{SAV
         print(f"Generated: {generated_text}")
         print("-----")
 
-load_model_and_generate("/home/xr/code/projects/llm/nanoGPT_tests/checkpoints/checkpoint_fineweb_1B_tied_999735296/checkpoint_fineweb_1B_tied_999735296.pt")
+load_model_and_generate("/home/xr/code/projects/llm/nanoGPT_tests/checkpoints/fineweb_999M_tied_kvh=2/fineweb_999M_tied_kvh=2.pt")

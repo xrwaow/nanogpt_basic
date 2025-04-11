@@ -1,7 +1,29 @@
+# model.py
 import torch
 from torch import nn
 import torch.nn.functional as F
 import math
+
+# --- RMSNorm Layer ---
+class RMSNorm(nn.Module):
+    """Root Mean Square Layer Normalization"""
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        # The gamma parameter (learnable gain)
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def _norm(self, x):
+        # Calculate the Root Mean Square: sqrt(mean(x^2) + eps)
+        rms = torch.sqrt(torch.mean(x * x, dim=-1, keepdim=True) + self.eps)
+        # Normalize: x / rms
+        return x / rms
+
+    def forward(self, x):
+        # Normalize the input and scale by the learnable weight parameter
+        output = self._norm(x.float()).type_as(x) # Cast to float for calculation, then back
+        return output * self.weight
+
 
 # Helper function for Rotary Positional Embeddings (RoPE)
 def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
@@ -164,7 +186,7 @@ class MultiheadGQA(nn.Module):
         return self.out_proj(y) # (B, T, C)
 
 
-class mlp(nn.Module):
+class mlp_depricated(nn.Module):
     def __init__(self, n_embd, use_bias):
         super().__init__()
         self.fc1 = nn.Linear(n_embd, n_embd*4, bias=use_bias)
@@ -176,13 +198,34 @@ class mlp(nn.Module):
     def forward(self, x):
         return self.net(x)
 
+#class SwiGLU(nn.Module):
+#    def forward(self, x):
+#        x, gate = x.chunk(2, dim=-1)
+#       return x * F.silu(gate)
+
+class MLP(nn.Module):
+    def __init__(self, n_embd, use_bias):
+        super().__init__()
+        hidden_dim = n_embd * 4
+
+        self.gate_proj = nn.Linear(n_embd, hidden_dim, bias=use_bias)
+        self.up_proj = nn.Linear(n_embd, hidden_dim, bias=use_bias)
+        self.down_proj = nn.Linear(hidden_dim, n_embd, bias=use_bias)
+        #self.act_fn = nn.SiLU() # Swish activation
+
+    def forward(self, x):
+        # F.silu(gate_proj(x)) * up_proj(x)
+        return self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
+        #return self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+
 class transformer_block(nn.Module):
     def __init__(self, n_embd, n_heads, kv_heads, use_bias, rope_theta, block_size):
         super().__init__()
         self.attn = MultiheadGQA(n_embd, n_heads, kv_heads, use_bias, rope_theta, block_size)
-        self.mlp = mlp(n_embd, use_bias)
-        self.ln1 = nn.LayerNorm(n_embd)
-        self.ln2 = nn.LayerNorm(n_embd)
+        self.mlp = MLP(n_embd, use_bias)
+        # Use RMSNorm instead of LayerNorm
+        self.ln1 = RMSNorm(n_embd)
+        self.ln2 = RMSNorm(n_embd)
 
     def forward(self, x):
         x = x + self.attn(self.ln1(x))
@@ -190,9 +233,9 @@ class transformer_block(nn.Module):
         return x
 
 class llm(nn.Module):
-    def __init__(self, vocab_size, n_layers, n_heads, n_embd, kv_heads, use_bias, rope_theta, block_size, print_model_params=False):
+    def __init__(self, vocab_size, n_layers, n_heads, n_embd, kv_heads, use_bias, rope_theta, block_size, tie_weights=True, print_model_params=False):
         super().__init__()
-        
+
         self.model_params = {
             'vocab_size': vocab_size,
             'n_layers': n_layers,
@@ -202,6 +245,7 @@ class llm(nn.Module):
             'use_bias': use_bias,
             'rope_theta': rope_theta,
             'block_size': block_size,
+            'tie_weights': tie_weights, # Store tie_weights config
             'print_model_params': print_model_params
         }
 
@@ -212,27 +256,43 @@ class llm(nn.Module):
             transformer_block(n_embd, n_heads, kv_heads, use_bias, rope_theta, block_size)
             for _ in range(n_layers)
         ])
-        self.ln_f = nn.LayerNorm(n_embd) # Final LayerNorm
+        # Use RMSNorm for final normalization
+        self.ln_f = RMSNorm(n_embd)
         self.head = nn.Linear(n_embd, vocab_size, bias=use_bias) # Output head
 
-        self.head.weight = self.embed.weight # Weight tying
+        # Initialize embedding weights (always happens)
+        init_std_embed = (n_embd) ** -0.5
+        torch.nn.init.normal_(self.embed.weight, mean=0.0, std=init_std_embed)
 
-        init_std = (n_embd) ** -0.5
-        if print_model_params:
-            print(f"Re-initializing tied weights with std={init_std:.4f} (1/sqrt(n_embd))")
-        torch.nn.init.normal_(self.embed.weight, mean=0.0, std=init_std)
+        if tie_weights:
+            self.head.weight = self.embed.weight # Weight tying
+            # Re-initialize tied weights (using the same std as embedding)
+            if print_model_params:
+                print(f"Tying weights and re-initializing tied head.weight with std={init_std_embed:.4f}")
+            # No need to re-init embed.weight again, it's already done
+        else:
+            # Initialize head weights separately if not tied
+            init_std_head = (n_embd) ** -0.5 # Or use a different initialization if desired
+            torch.nn.init.normal_(self.head.weight, mean=0.0, std=init_std_head)
+            if print_model_params:
+                print(f"NOT tying weights. Initializing head.weight separately with std={init_std_head:.4f}")
+
+        # Initialize head bias if it exists and is not tied to embedding bias (which doesn't exist)
+        if use_bias and self.head.bias is not None:
+             torch.nn.init.zeros_(self.head.bias)
 
         if print_model_params:
             self._print_params() # Call helper for parameter printing
 
     def _print_params(self):
         """Helper function to calculate and print parameter counts."""
-        print("----- Parameter Calculation (RoPE) -----")
+        print("----- Parameter Calculation (RMSNorm, RoPE, GQA) -----")
 
         def count_params(module):
             # Count only trainable parameters
             return sum(p.numel() for p in module.parameters() if p.requires_grad)
 
+        # Parameters for Embedding layer
         embed_params = count_params(self.embed)
         n_layers_actual = len(self.blocks) # Get actual number of layers
 
@@ -242,20 +302,23 @@ class llm(nn.Module):
             # Note: RoPE freqs are in buffers, not parameters, so not counted here
             attn_params_per_layer = count_params(first_block.attn)
             mlp_params_per_layer = count_params(first_block.mlp)
-            ln_params_per_layer = count_params(first_block.ln1) + count_params(first_block.ln2)
+            # RMSNorm only has 'weight' parameter per instance
+            norm_params_per_layer = count_params(first_block.ln1) + count_params(first_block.ln2)
             one_layer_params = count_params(first_block)
         else:
-            attn_params_per_layer = mlp_params_per_layer = ln_params_per_layer = one_layer_params = 0
+            attn_params_per_layer = mlp_params_per_layer = norm_params_per_layer = one_layer_params = 0
 
         # Parameters for final layers
         ln_f_params = count_params(self.ln_f)
+
         # Head params (consider weight tying)
-        if hasattr(self.head, 'weight') and hasattr(self.embed, 'weight') and self.head.weight is self.embed.weight:
+        tie_weights = self.model_params.get('tie_weights', True) # Get from stored params
+        if tie_weights:
             # Only count bias if it exists and is trainable
             head_params_effective = count_params(self.head.bias) if self.head.bias is not None else 0
             tying_info = "(Tied Weight)"
         else:
-            head_params_effective = count_params(self.head)
+            head_params_effective = count_params(self.head) # Count weight and bias (if exists)
             tying_info = "(Untied)"
 
         # Calculate total directly from the model (most reliable)
@@ -265,16 +328,16 @@ class llm(nn.Module):
         if self.blocks:
             print("--- Per Layer ---")
             print(f"  Attention (GQA + RoPE): {attn_params_per_layer:,} (RoPE freqs are non-parameter buffers)")
-            print(f"  MLP: {mlp_params_per_layer:,}")
-            print(f"  LayerNorms (x2): {ln_params_per_layer:,}")
+            print(f"  MLP (SwiGLU): {mlp_params_per_layer:,}")
+            print(f"  RMSNorms (x2): {norm_params_per_layer:,}")
             print(f"  Total per Transformer Layer: {one_layer_params:,}")
             print(f"Total for {n_layers_actual} Layers: {one_layer_params * n_layers_actual:,}")
         print("--- Final Layers ---")
-        print(f"Final LayerNorm: {ln_f_params:,}")
+        print(f"Final RMSNorm: {ln_f_params:,}")
         print(f"Output Head {tying_info}: {head_params_effective:,}")
         print("--- Grand Total ---")
         print(f"Total Trainable Parameters: {total_params_actual:,}")
-        print("----- ------------------------------ -----")
+        print("----- --------------------------------------------- -----")
 
 
     def forward(self, x):
@@ -295,7 +358,7 @@ class llm(nn.Module):
     def generate(self, x, max_tokens=10, temperature=1.0, top_k=None, echo_back=False):
         """
         Generates token sequences with optional sampling strategies.
-        Uses standard Top-P (nucleus) sampling if min_p is between 0 and 1.
+        Uses standard Top-K sampling.
         """
 
         generated_tokens = [] # Store only newly generated tokens
@@ -321,7 +384,6 @@ class llm(nn.Module):
             probs = F.softmax(logits, dim=-1) # (B, VocabSize)
 
             next_token = torch.multinomial(probs, num_samples=1) # (B, 1)
-
 
             # Append the new token to the context for the next step
             current_context = torch.cat([current_context, next_token], dim=1) # (B, T_prompt + generated_len)

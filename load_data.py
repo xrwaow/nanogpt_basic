@@ -10,10 +10,10 @@ from tqdm import tqdm
 
 from config import (
     BLOCK_SIZE, BATCH_SIZE, DEVICE, DATA_DIR, DATA_PREP_BATCH_SIZE,
-    DATA_PREP_NUM_PROC, CHECKPOINT_DIR, SAVE_MODEL_NAME, N_LAYERS
+    DATA_PREP_NUM_PROC, CHECKPOINT_DIR, SAVE_DIR_NAME, N_LAYERS
 )
 
-from model import llm
+from model import llm, RMSNorm
 
 def prepare_data_optimized(dataset_name, max_tokens, tokenizer):
     """Loads, tokenizes, and saves/appends data efficiently up to max_tokens."""
@@ -44,7 +44,7 @@ def prepare_data_optimized(dataset_name, max_tokens, tokenizer):
             print(f"Using existing data file {file} with {file_tokens} tokens (>= {max_tokens})")
             try:
                 start_load = time.time()
-                loaded_data = torch.load(file, map_location='cpu')
+                loaded_data = torch.load(file, map_location='cpu', weights_only=False)
                 if loaded_data.numel() > max_tokens:
                     data_tensor = loaded_data[:max_tokens].long()
                 else:
@@ -232,7 +232,7 @@ def get_batch(data):
 
 def save_fig(metrics):
     """Saves a plot of main training metrics (excluding layer sparsity)."""
-    base_dir = os.path.join(CHECKPOINT_DIR, SAVE_MODEL_NAME)
+    base_dir = os.path.join(CHECKPOINT_DIR, SAVE_DIR_NAME)
     os.makedirs(base_dir, exist_ok=True)
     fig_path = os.path.join(base_dir, f"training_metrics.png")
 
@@ -270,7 +270,7 @@ def save_fig(metrics):
 
 def save_layer_sparsity_plot(layer_sparsity_metrics, n_layers):
     """Saves a plot showing activation sparsity for each layer's MLP over time."""
-    base_dir = os.path.join(CHECKPOINT_DIR, SAVE_MODEL_NAME)
+    base_dir = os.path.join(CHECKPOINT_DIR, SAVE_DIR_NAME)
     os.makedirs(base_dir, exist_ok=True)
     fig_path = os.path.join(base_dir, f"layer_sparsity.png")
 
@@ -284,7 +284,8 @@ def save_layer_sparsity_plot(layer_sparsity_metrics, n_layers):
 
     plt.figure(figsize=(5 * cols, 4 * rows))
 
-    plt.suptitle(f'MLP Activation Sparsity per Layer)', fontsize=16, y=1.02)
+    # Updated title to be more specific
+    plt.suptitle(f'MLP Activation Sparsity (Input to Down Projection) per Layer', fontsize=16, y=1.02)
 
     for layer_idx in range(n_layers):
         ax = plt.subplot(rows, cols, layer_idx + 1)
@@ -313,11 +314,11 @@ def save_layer_sparsity_plot(layer_sparsity_metrics, n_layers):
 
 def save_checkpoint(model, metrics):
     """Saves model checkpoint, final main metrics plot, final layer sparsity plot, and metrics data."""
-    base_dir = os.path.join(CHECKPOINT_DIR, SAVE_MODEL_NAME)
+    base_dir = os.path.join(CHECKPOINT_DIR, SAVE_DIR_NAME)
     os.makedirs(base_dir, exist_ok=True)
 
     # --- Save Model State ---
-    checkpoint_path = os.path.join(base_dir, f"{SAVE_MODEL_NAME}.pt")
+    checkpoint_path = os.path.join(base_dir, f"checkpoint.pt")
     model_to_save = model._orig_mod if hasattr(model, '_orig_mod') else model
     checkpoint = {
         'model_state_dict': model_to_save.state_dict(),
@@ -329,7 +330,7 @@ def save_checkpoint(model, metrics):
         print(f"Error saving model checkpoint {checkpoint_path}: {e}")
 
     # --- Save Metrics Data as JSON ---
-    metrics_json_path = os.path.join(base_dir, f"{SAVE_MODEL_NAME}_metrics.json")
+    metrics_json_path = os.path.join(base_dir, f"checkpoint_metrics.json")
     metrics_to_save = {}
     for k, vals in metrics.items():
         if k == 'layer_sparsity':
@@ -360,14 +361,17 @@ def load_checkpoint(filename_path):
     print(f"Loading checkpoint from: {filename_path}")
     checkpoint = torch.load(filename_path, map_location='cpu')
     params = checkpoint['model_params']
+    print("Loaded model params:", params)
 
     # Ensure all necessary keys exist in params before calling llm constructor
     required_keys = ['vocab_size', 'n_layers', 'n_heads', 'n_embd', 'kv_heads', 'use_bias', 'rope_theta', 'block_size']
+    # tie_weights is optional for backward compatibility, defaults to True if missing
+    optional_keys = ['tie_weights']
+
     missing_keys = [key for key in required_keys if key not in params]
-    if (key for key in required_keys if key not in params):
-        # Try to load with default values from current config if keys are missing (for backward compatibility)
+    if missing_keys:
+        # Try to load with default values from current config if essential keys are missing
         print(f"Warning: Checkpoint 'model_params' is missing keys: {missing_keys}. Attempting to use default values from current config.")
-        # Load defaults from config (assuming config.py is accessible)
         try:
             import config as cfg_load
             default_values = {
@@ -377,13 +381,14 @@ def load_checkpoint(filename_path):
                 'use_bias': cfg_load.USE_BIAS,
                 'rope_theta': cfg_load.ROPE_THETA,
                 'block_size': cfg_load.BLOCK_SIZE,
+                'tie_weights': cfg_load.TIE_WEIGHTS, # Also load default for tie_weights if needed
                 'print_model_params': False # Default for loading
             }
             for key in missing_keys:
                 if key in default_values:
                     params[key] = default_values[key]
                     print(f"Using default value for '{key}': {params[key]}")
-                elif key == 'vocab_size' or key == 'n_layers':
+                elif key in ['vocab_size', 'n_layers']: # Truly essential keys
                      raise KeyError(f"Checkpoint 'model_params' is missing essential key '{key}' with no default available in current config.")
                 else: # Handle other potential missing keys if necessary
                      print(f"Warning: No default value found for missing key '{key}' in current config. Model loading might fail.")
@@ -391,6 +396,12 @@ def load_checkpoint(filename_path):
             raise ImportError("Failed to import config.py to get default values for missing model parameters in checkpoint.")
         except KeyError as e:
              raise KeyError(f"Checkpoint 'model_params' is missing essential key '{e}' and it's not found in current config defaults.")
+
+    # Handle optional tie_weights parameter (default to True if missing)
+    tie_weights = params.get('tie_weights', True)
+    if 'tie_weights' not in params:
+        print(f"Warning: 'tie_weights' not found in checkpoint model_params. Defaulting to {tie_weights}.")
+
 
     model = llm(
         vocab_size=params['vocab_size'],
@@ -401,6 +412,7 @@ def load_checkpoint(filename_path):
         use_bias=params['use_bias'],
         rope_theta=params['rope_theta'],
         block_size=params['block_size'],
+        tie_weights=tie_weights, # Pass the determined tie_weights value
         print_model_params=params.get('print_model_params', False)
     )
 
@@ -419,19 +431,48 @@ def load_checkpoint(filename_path):
         else:
             unwrapped_state_dict[k] = v
 
+    # --- Adjust state_dict keys for RMSNorm vs LayerNorm ---
+    # If loading an old checkpoint saved with LayerNorm into a model now using RMSNorm,
+    # we need to potentially rename/ignore the LayerNorm bias terms.
+    # RMSNorm only has 'weight'. LayerNorm has 'weight' and 'bias'.
+    final_state_dict = {}
+    for key, value in unwrapped_state_dict.items():
+        # Check if the key belongs to a LayerNorm bias that doesn't exist in RMSNorm
+        if ("ln1.bias" in key or "ln2.bias" in key or "ln_f.bias" in key):
+            # Check if the corresponding module in the current model is RMSNorm
+            module_name_parts = key.split('.')
+            try:
+                current_module = model
+                for part in module_name_parts[:-1]: # Navigate to the parent module
+                    current_module = getattr(current_module, part)
+                # If the parent module is RMSNorm, skip loading the 'bias' parameter
+                if isinstance(current_module, RMSNorm):
+                    print(f"Skipping loading parameter '{key}' as the current model uses RMSNorm which has no bias.")
+                    continue
+                else: # If it's somehow still LayerNorm or something else unexpected
+                    final_state_dict[key] = value
+            except AttributeError:
+                 # Could happen if the model structure changed drastically
+                 print(f"Warning: Could not find module for key '{key}' while checking for RMSNorm compatibility. Including parameter.")
+                 final_state_dict[key] = value
+        else:
+            final_state_dict[key] = value
+
+
     try:
-        # Load the state dict. Strict=True ensures keys match.
-        model.load_state_dict(unwrapped_state_dict, strict=True)
-    except RuntimeError as e:
-        print(f"Warning: Error loading state_dict (strict=True): {e}")
-        print("Attempting to load with strict=False...")
-        try:
-            # Try loading non-strictly if needed (e.g., missing non-essential keys)
-            model.load_state_dict(unwrapped_state_dict, strict=False)
-            print("Loaded state_dict with strict=False.")
-        except Exception as e2:
-            print(f"Failed to load state_dict even with strict=False: {e2}")
-            raise e # Re-raise the original strict error if strict=False also fails
+        # Load the potentially adjusted state dict.
+        # Use strict=False initially because of the RMSNorm vs LayerNorm bias difference.
+        missing_keys, unexpected_keys = model.load_state_dict(final_state_dict, strict=False)
+        if unexpected_keys:
+             print(f"Warning: Unexpected keys found in state_dict: {unexpected_keys}")
+        if missing_keys:
+             # This is more serious - indicates parameters the model expects are not in the checkpoint
+             print(f"Error: Missing keys in state_dict: {missing_keys}")
+             raise RuntimeError(f"Missing keys: {missing_keys}") # Or handle more gracefully if appropriate
+
+    except Exception as e:
+        print(f"Failed to load state_dict: {e}")
+        raise e # Re-raise the error after printing details
 
     model.to(DEVICE)
     print(f"Model loaded successfully to {DEVICE}.")
@@ -451,22 +492,21 @@ def generate_examples(model, iter_num, loss, total_tokens, tokenizer):
         {"max_tokens": 32, "temperature": 1.0, "top_k": None},
     ]
 
-    output_str = f"===== Generation at Iter: {iter_num}, Loss: {loss:.4f}, Total Tokens: {total_tokens:,} =====\n\n"
+    output_str = f"Iter: {iter_num}, Loss: {loss:.4f}, Total Tokens: {total_tokens:,}\n"
 
     for prompt_text in prompts:
-        output_str += f"--- Prompt: \"{prompt_text}\" ---\n"
+        output_str += f"---\n"
         prompt_tokens = tokenizer.encode(prompt_text, return_tensors='pt').to(DEVICE)
 
         for i, params in enumerate(param_variations):
             generated_ids = model.generate(prompt_tokens, **params, echo_back=False)
             generated_text = tokenizer.decode(generated_ids, skip_special_tokens=True)
 
-            param_desc = ", ".join([f"{k}={v}" for k,v in params.items()])
-            output_str += f"Params: ({param_desc})\n"
-            output_str += f"Output: |{generated_text.strip()}\n\n"
+            param_desc = f"temp: {params['temperature']}, top_k={str(params['top_k']):>4}"
+            output_str += f"{param_desc}: {prompt_text}|{generated_text.strip()}\n"
         output_str += "---\n\n"
 
-    checkpoint_dir = os.path.join(CHECKPOINT_DIR, SAVE_MODEL_NAME)
+    checkpoint_dir = os.path.join(CHECKPOINT_DIR, SAVE_DIR_NAME)
     os.makedirs(checkpoint_dir, exist_ok=True)
     file_path = os.path.join(checkpoint_dir, "example_generations.txt")
 

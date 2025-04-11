@@ -17,7 +17,7 @@ from model import llm
 
 torch.manual_seed(cfg.SEED)
 
-checkpoint_base_dir = os.path.join(cfg.CHECKPOINT_DIR, cfg.SAVE_MODEL_NAME)
+checkpoint_base_dir = os.path.join(cfg.CHECKPOINT_DIR, cfg.SAVE_DIR_NAME)
 os.makedirs(checkpoint_base_dir, exist_ok=True)
 config_save_path = os.path.join(checkpoint_base_dir, "config.json")
 
@@ -40,10 +40,17 @@ current_macro_batch_layer_sparsity = {}
 
 def sparsity_hook_factory(layer_idx):
     """Creates a hook function that knows its layer index."""
-    def sparsity_hook(module, input, output):
-        """Forward hook to calculate activation sparsity for a specific layer."""
+    def sparsity_hook(module, input, output): # Keep signature standard
+        """Forward hook to calculate activation sparsity based on the INPUT to a module."""
+        # We hook the input to the MLP's down_proj layer.
+        # 'input' is a tuple containing the input tensors. We need the first one.
+        if not input or not isinstance(input[0], torch.Tensor):
+             # Skip if input is unexpected
+             return
+        
+        target_tensor = input[0]
         threshold = 1e-3 # Define the threshold for 'zero' activation
-        is_zero = torch.abs(output) < threshold
+        is_zero = torch.abs(target_tensor) < threshold
         sparsity = torch.mean(is_zero.float()).item()
         # Append to the list for the specific layer within the current macro batch
         if layer_idx not in current_macro_batch_layer_sparsity:
@@ -101,15 +108,17 @@ hook_handles = []
 if hasattr(llm_model, 'blocks') and isinstance(llm_model.blocks, torch.nn.ModuleList):
     for i, block in enumerate(llm_model.blocks):
         try:
-            # Target the GELU activation in each MLP block's sequential net (index 1)
-            target_module = block.mlp.net[1]
+            # Target the INPUT of the down_proj layer in the MLP block
+            # This captures the state after the SiLU activation and multiplication
+            target_module = block.mlp.down_proj
             hook_func = sparsity_hook_factory(i)
+            # Use register_forward_hook, but the hook function itself looks at the 'input' argument
             handle = target_module.register_forward_hook(hook_func)
             hook_handles.append(handle)
             if cfg.PRINT_MODEL_PARAMS: # Only print if enabled
-                print(f"Registered sparsity hook on layer {i} MLP GELU.")
+                print(f"Registered sparsity hook on input of Layer {i} MLP down_proj.")
         except AttributeError:
-             print(f"Warning: Could not find mlp.net[1] in block {i}. Skipping hook.")
+             print(f"Warning: Could not find mlp.down_proj in block {i}. Skipping hook.")
         except Exception as e:
             print(f"Warning: Could not register sparsity hook for layer {i}: {e}")
 else:

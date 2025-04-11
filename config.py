@@ -1,5 +1,4 @@
 import torch
-import os
 
 # --- Model Architecture ---
 N_LAYERS=   12
@@ -8,6 +7,7 @@ KV_HEADS =   2#6  # Key/Value heads for GQA. N_HEADS must be divisible by KV_HEA
 N_EMBD  =  768
 USE_BIAS = False
 ROPE_THETA = 10000.0 # RoPE base frequency
+TIE_WEIGHTS = True # Tie embedding and output projection weights
 
 # --- Training Hyperparameters ---
 total_tokens =   1e7
@@ -33,11 +33,11 @@ warmup_iters = 10
 lr_decay_iters = MAX_TOKENS // TOKENS_PER_BATCH # Steps for cosine decay (typically max_iters)
 
 # --- Checkpointing & Logging ---
-GET_SAMPLE_EVERY = 10#50
+GET_SAMPLE_EVERY = 50
 SAVE_EVERY = GET_SAMPLE_EVERY * 4
 CHECKPOINT_DIR = "checkpoints"
 
-SAVE_MODEL_NAME = f"fineweb_{MAX_TOKENS // 1_000_000}M"#f"llm_L{N_LAYERS}_H{N_HEADS}_KV{KV_HEADS}_E{N_EMBD}_T{MAX_TOKENS // 1_000_000}M"
+SAVE_DIR_NAME = f"testing_fineweb_{MAX_TOKENS // 1_000_000}M"
 
 # --- Data ---
 DATA_DIR = "data"
@@ -52,7 +52,7 @@ DEVICE = "cuda"
 AMP_DTYPE = torch.bfloat16
 
 # --- Misc ---
-PRINT_MODEL_PARAMS = False
+PRINT_MODEL_PARAMS = True#False
 
 # --- Assertions for Sanity ---
 assert N_HEADS % KV_HEADS == 0, "N_HEADS must be divisible by KV_HEADS"
